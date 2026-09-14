@@ -1,0 +1,15 @@
+**/__pycache__
+**/*.out
+**/*.error
+**/*.swp
+**/*.log
+**/checkpoints
+**/climate_learn.egg-info
+**/*.egg-info
+**/.DS_Store
+**/.pytest_cache
+**/*.pyc
+launch/imgs*/
+launch/outputs*/
+outputs/
+wandb/

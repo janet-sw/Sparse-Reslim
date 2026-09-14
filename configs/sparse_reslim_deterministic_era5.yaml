@@ -1,0 +1,69 @@
+trainer:
+  max_epochs: 30
+  batch_size: 16
+  num_workers: 2
+  checkpoint: null
+  checkpoint_save_path: "<OUTPUT_DIR>/deterministic"
+  data_type: bfloat16
+  train_loss: lat_mse
+  num_gpus: 16
+  buffer_size: 100
+
+parallelism:
+  fsdp: 1
+  simple_ddp: 1
+  tensor_par: 1
+  seq_par: 1
+
+data:
+  era5_dir: "<DATA_DIR>/era5_1.0deg"
+  timestep_data_dir: "<DATA_DIR>/era5_1.0deg_timesteps"
+  forecast_type: direct
+  pred_range: 120
+  enable_monthly_loader: true
+  enable_timestep_loader: false
+  variables:
+    - temperature
+    - geopotential
+    - specific_humidity
+    - u_component_of_wind
+    - v_component_of_wind
+    - relative_humidity
+    - 2m_temperature
+    - 10m_u_component_of_wind
+    - 10m_v_component_of_wind
+    - land_sea_mask
+  out_variables:
+    - geopotential_500
+    - temperature_850
+    - 2m_temperature
+    - 10m_u_component_of_wind
+
+model:
+  preset: res_slimvit_adaptive
+  img_size: [180, 360]
+  superres_factor: 1
+  downsample_mode: bilinear
+  antialias: true
+  history: 1
+  cnn_ratio: 4
+  patch_size: 2
+  embed_dim: 256
+  depth: 12
+  decoder_depth: 4
+  num_heads: 4
+  mlp_ratio: 4.0
+  drop_path: 0.0
+  drop_rate: 0.0
+  learn_pos_emb: true
+  input_refine_cnn: true
+  keep_ratio: 0.25
+  num_dense_early: 2
+  num_sparse_middle: 8
+  base_lr: 5e-4
+  weight_decay: 1e-5
+  beta_1: 0.9
+  beta_2: 0.99
+  warmup_epochs: 5
+  warmup_start_lr: 1e-6
+  eta_min: 1e-8

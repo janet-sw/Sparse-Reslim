@@ -1,0 +1,175 @@
+trainer:
+  max_epochs: 100
+  checkpoint: null
+  pretrain: null
+  cp_save_path: "<OUTPUT_DIR>/edm_180m"
+  preview_dir: null
+  batch_size: 1
+  buffer_size: 100
+  num_workers: 2
+  data_type: bfloat16
+  gpu_type: amd
+  train_loss: mse
+
+parallelism:
+  # Paper run: 8 nodes / 64 MI250X GPUs. Adjust these values together with
+  # your launcher world size.
+  fsdp: 8
+  simple_ddp: 8
+  tensor_par: 1
+
+tiling:
+  do_tiling: false
+  div: 1
+  overlap: 0
+
+compression:
+  compress_ratio: 1
+  compress_cond_only: false
+  learned_compression: false
+
+EDM_hyper:
+  sigma_data: 1
+  weight_mode: null
+  use_residual_path: true
+
+model:
+  preset: edm
+  lr: 2e-4
+  weight_decay: 1e-5
+  beta_1: 0.9
+  beta_2: 0.99
+  warmup_epochs: 10
+  warmup_start_lr: 1e-7
+  eta_min: 1e-8
+  patch_size: 6
+  embed_dim: 1024
+  depth: 8
+  decoder_depth: 4
+  num_heads: 8
+  mlp_ratio: 4.0
+  drop_path: 0.0
+  drop_rate: 0.0
+  keep_ratio: 0.25
+  num_dense_early: 2
+  num_sparse_middle: 4
+
+data:
+  src:
+    ERA5_1: era5
+  pred_range:
+    ERA5_1: 120
+  history:
+    ERA5_1: 8
+  window:
+    ERA5_1: 6
+  data_dir:
+    ERA5_1: "<DATA_DIR>/era5_1.0deg"
+  spatial_resolution:
+    ERA5_1: 111
+  default_vars:
+    - geopotential_50
+    - geopotential_250
+    - geopotential_500
+    - geopotential_600
+    - geopotential_700
+    - geopotential_850
+    - geopotential_925
+    - temperature_50
+    - temperature_250
+    - temperature_500
+    - temperature_600
+    - temperature_700
+    - temperature_850
+    - temperature_925
+    - specific_humidity_50
+    - specific_humidity_250
+    - specific_humidity_500
+    - specific_humidity_600
+    - specific_humidity_700
+    - specific_humidity_850
+    - specific_humidity_925
+    - u_component_of_wind_50
+    - u_component_of_wind_250
+    - u_component_of_wind_500
+    - u_component_of_wind_600
+    - u_component_of_wind_700
+    - u_component_of_wind_850
+    - u_component_of_wind_925
+    - v_component_of_wind_50
+    - v_component_of_wind_250
+    - v_component_of_wind_500
+    - v_component_of_wind_600
+    - v_component_of_wind_700
+    - v_component_of_wind_850
+    - v_component_of_wind_925
+    - relative_humidity_50
+    - relative_humidity_250
+    - relative_humidity_500
+    - relative_humidity_600
+    - relative_humidity_700
+    - relative_humidity_850
+    - relative_humidity_925
+    - 2m_temperature
+    - 10m_u_component_of_wind
+    - 10m_v_component_of_wind
+    - land_sea_mask
+  dict_in_variables:
+    ERA5_1:
+      - geopotential_50
+      - geopotential_250
+      - geopotential_500
+      - geopotential_600
+      - geopotential_700
+      - geopotential_850
+      - geopotential_925
+      - temperature_50
+      - temperature_250
+      - temperature_500
+      - temperature_600
+      - temperature_700
+      - temperature_850
+      - temperature_925
+      - specific_humidity_50
+      - specific_humidity_250
+      - specific_humidity_500
+      - specific_humidity_600
+      - specific_humidity_700
+      - specific_humidity_850
+      - specific_humidity_925
+      - u_component_of_wind_50
+      - u_component_of_wind_250
+      - u_component_of_wind_500
+      - u_component_of_wind_600
+      - u_component_of_wind_700
+      - u_component_of_wind_850
+      - u_component_of_wind_925
+      - v_component_of_wind_50
+      - v_component_of_wind_250
+      - v_component_of_wind_500
+      - v_component_of_wind_600
+      - v_component_of_wind_700
+      - v_component_of_wind_850
+      - v_component_of_wind_925
+      - relative_humidity_50
+      - relative_humidity_250
+      - relative_humidity_500
+      - relative_humidity_600
+      - relative_humidity_700
+      - relative_humidity_850
+      - relative_humidity_925
+      - 2m_temperature
+      - 10m_u_component_of_wind
+      - 10m_v_component_of_wind
+      - land_sea_mask
+  dict_out_variables:
+    ERA5_1:
+      - geopotential_500
+      - temperature_850
+      - 2m_temperature
+      - 10m_u_component_of_wind
+  var_weights:
+    geopotential_500: 1
+    temperature_850: 1
+    2m_temperature: 1
+    10m_u_component_of_wind: 1

@@ -1,0 +1,37 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: >-
+  Sparse-Reslim: Sparse Residual Routing for Efficient Weather Prediction
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Janet
+    family-names: Wang
+    affiliation: Tulane University
+  - given-names: Yunbei
+    family-names: Zhang
+    affiliation: Tulane University
+  - given-names: Lin
+    family-names: Zhao
+    affiliation: Northeastern University
+  - given-names: Xi
+    family-names: Xiao
+    affiliation: University of Alabama at Birmingham
+  - given-names: Jihun
+    family-names: Hamm
+    affiliation: Tulane University
+  - given-names: Xiao
+    family-names: Wang
+    affiliation: Oak Ridge National Laboratory
+identifiers:
+  - type: url
+    value: 'https://arxiv.org/abs/2607.02829'
+    description: Paper preprint
+repository-code: 'https://github.com/janet-sw/Sparse-Reslim'
+abstract: >-
+  Official implementation of Sparse-Reslim, a parameter-free sparse residual
+  routing module for efficient deterministic and generative weather forecasting.
