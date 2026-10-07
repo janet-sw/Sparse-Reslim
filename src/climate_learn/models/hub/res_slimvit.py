@@ -40,9 +40,12 @@ class Res_Slim_ViT(nn.Module):
         tensor_par_size = 1,
         tensor_par_group = None,
         FusedAttn_option = FusedAttn.DEFAULT,
+        num_constant_vars=4,
+        input_refine_cnn=False,
     ):
         super().__init__()
         self.default_vars = default_vars
+        self.input_refine_cnn = input_refine_cnn
 
 
         self.img_size = img_size
@@ -105,7 +108,7 @@ class Res_Slim_ViT(nn.Module):
 
         #skip connection path
         self.path2 = nn.ModuleList()
-        self.path2.append(nn.Conv2d(in_channels=(out_channels+4), out_channels=cnn_ratio*superres_mag*superres_mag, kernel_size=(3, 3), stride=1, padding=1))
+        self.path2.append(nn.Conv2d(in_channels=(out_channels+num_constant_vars), out_channels=cnn_ratio*superres_mag*superres_mag, kernel_size=(3, 3), stride=1, padding=1))
         self.path2.append(nn.GELU())
         self.path2.append(nn.PixelShuffle(superres_mag))
         self.path2.append(nn.Conv2d(in_channels=cnn_ratio, out_channels=out_channels, kernel_size=(3, 3), stride=1, padding=1))
@@ -120,6 +123,14 @@ class Res_Slim_ViT(nn.Module):
         self.head = nn.Sequential(*self.head)
 
         self.conv_out = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=(3, 3), stride=1, padding=1)
+
+        if self.input_refine_cnn:
+            self.input_refine = nn.Sequential(
+                nn.Conv2d(in_channels * history, in_channels * history, kernel_size=3, padding=1),
+                nn.GELU(),
+            )
+        else:
+            self.input_refine = nn.Identity()
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -300,19 +311,22 @@ class Res_Slim_ViT(nn.Module):
 
 
     def find_var_index(self,in_variables,out_variables):
-        temp_index= [in_variables.index(variable) for variable in out_variables]
-        temp_index.append(in_variables.index("land_sea_mask"))
-        temp_index.append(in_variables.index("orography"))
-        temp_index.append(in_variables.index("lattitude"))
-        temp_index.append(in_variables.index("landcover"))
-
-
+        temp_index = [in_variables.index(variable) for variable in out_variables]
+        optional_vars = ["land_sea_mask", "orography", "lattitude", "landcover"]
+        for var in optional_vars:
+            if var in in_variables:
+                temp_index.append(in_variables.index(var))
         return temp_index
 
     def forward(self, x, in_variables,out_variables):
         if len(x.shape) == 5:  # x.shape = [B,T,in_channels,H,W]
             x = x.flatten(1, 2)
         # x.shape = [B,T*in_channels,H,W]
+
+        if self.input_refine_cnn:
+            x = x + self.input_refine(x)
+        else:
+            x = self.input_refine(x)
 
         out_var_index = self.find_var_index(in_variables,out_variables)
 

@@ -3,7 +3,6 @@ from argparse import ArgumentParser
 import os
 import sys
 import time
-import yaml
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -47,7 +46,8 @@ from climate_learn.utils.fused_attn import FusedAttn
 from climate_learn.models.hub.components.pos_embed import interpolate_pos_embed
 from climate_learn.data.transforms import collate_resize, collate_batch_only, custom_collate
 from climate_learn.utils.monthly_loader import SequentialMonthlyDataset
-from utils import seed_everything, init_par_groups
+from config_utils import batch_size_per_rank, load_yaml_config
+from utils import seed_everything
 
 from adaptive_monitor import AdaptiveMonitor
 from era5_timestep_dataset import ERA5TimestepDataset
@@ -224,12 +224,8 @@ def training_step(
     # Teaches the difficulty head to predict per-patch reconstruction error.
     # This gives it a symmetric signal: high error → high difficulty, low error → low difficulty.
     #
-    # CRITICAL IMPLEMENTATION NOTE:
-    # We cannot use difficulty_logits stored during forward() because REENTRANT
-    # activation checkpointing runs forward twice — the first pass (used for the
-    # forward result) has no grad, so tensors saved to DIAG during that pass
-    # produce zero gradients. Instead, we stored DETACHED input features and
-    # re-run the difficulty head here with a fresh autograd graph.
+    # Re-run the difficulty head here with a fresh autograd graph rather than
+    # depending on tensors stored as a side effect of a checkpointed forward.
     difficulty_features = DIAG.get('difficulty_input_features', None)
     if difficulty_features is not None and net.training:
         with torch.no_grad():
@@ -387,10 +383,7 @@ def parse_config(config_path, world_rank):
     if world_rank == 0:
         print(f"Loading config from: {config_path}", flush=True)
 
-    with open(config_path, "r") as f:
-        conf = yaml.load(f, Loader=yaml.FullLoader)
-
-    return conf
+    return load_yaml_config(config_path)
 
 
 def create_model_and_losses(config, device, world_rank, in_vars, out_vars, data_module):
@@ -409,7 +402,9 @@ def create_model_and_losses(config, device, world_rank, in_vars, out_vars, data_
     # Calculate actual number of channels (pressure levels are already expanded in in_vars/out_vars)
     in_channels = len(in_vars)
     out_channels = len(out_vars)
-    history = config["model"]["history"]
+    history = int(
+        config["data"].get("history", config["model"].get("history", 1))
+    )
 
     if world_rank == 0:
         print(f"Creating model: {preset}", flush=True)
@@ -633,16 +628,25 @@ def create_data_module(config, world_rank, device):
         print(f"Output variables: {out_vars}", flush=True)
 
     # Create data module
-    batch_size = config["trainer"]["batch_size"]
     num_workers = config["trainer"]["num_workers"]
-    history = config["model"]["history"]
+    history = int(
+        config["data"].get("history", config["model"].get("history", 1))
+    )
+    window = int(config["data"].get("window", 6))
+    subsample = int(config["data"].get("subsample", 6))
 
     # CRITICAL: Pass distributed parameters so each GPU reads only its chunk of data!
     # Without this, all 8 GPUs read the entire 40-year dataset simultaneously
     world_size_value = int(os.environ.get("SLURM_NTASKS", 1))
+    batch_size = batch_size_per_rank(config, world_size_value)
 
     if world_rank == 0:
         print(f"Setting up distributed data loading: world_size={world_size_value}", flush=True)
+        print(
+            f"Global batch size={config['trainer']['batch_size']}; "
+            f"per-rank batch size={batch_size}",
+            flush=True,
+        )
         print(f"Each GPU will process 1/{world_size_value} of the dataset", flush=True)
 
     buffer_size = config["trainer"]["buffer_size"]
@@ -658,9 +662,9 @@ def create_data_module(config, world_rank, device):
             data_par_group=None,  # Use default process group
             src="era5",
             history=history,
-            window=6,
+            window=window,
             pred_range=pred_range,
-            subsample=6,
+            subsample=subsample,
             batch_size=batch_size,
             num_workers=num_workers,
             # buffer_size=buffer_size,
@@ -676,12 +680,12 @@ def create_data_module(config, world_rank, device):
             data_par_group=None,  # Use default process group
             src="era5",
             history=history,
-            window=6,
+            window=window,
             pred_range=1,
             max_pred_range=120,
             random_lead_time=True,
             hrs_each_step=1,
-            subsample=6,
+            subsample=subsample,
             batch_size=batch_size,
             buffer_size=buffer_size,
             num_workers=num_workers,
@@ -1019,6 +1023,26 @@ def main(device):
     simple_ddp_size = config["parallelism"].get("simple_ddp", 1)
     tensor_par_size = config["parallelism"].get("tensor_par", 1)
     seq_par_size = config["parallelism"].get("seq_par", 1)
+    configured_world_size = int(config["trainer"].get("num_gpus", world_size))
+    if configured_world_size != world_size:
+        raise ValueError(
+            f"trainer.num_gpus={configured_world_size}, but Slurm launched "
+            f"{world_size} tasks"
+        )
+    if tensor_par_size != 1 or seq_par_size != 1 or simple_ddp_size != 1:
+        raise NotImplementedError(
+            "This entry point currently supports global FSDP only: "
+            "simple_ddp=1, tensor_par=1, seq_par=1"
+        )
+    if fsdp_size not in (1, world_size):
+        raise ValueError(
+            f"parallelism.fsdp must be 1 or the world size ({world_size})"
+        )
+
+    seed = int(config["trainer"].get("seed", 42))
+    activation_checkpointing = bool(
+        config["parallelism"].get("activation_checkpointing", True)
+    )
 
     if world_rank == 0:
         print("\n" + "=" * 80)
@@ -1027,12 +1051,15 @@ def main(device):
         print(f"Config: {config_path}")
         print(f"Max epochs: {max_epochs}")
         print(f"Data type: {data_type}")
+        print(f"Seed: {seed}")
+        print(f"FSDP ranks: {world_size}")
+        print(f"Activation checkpointing: {activation_checkpointing}")
         print(f"Checkpoint: {checkpoint_path if checkpoint_path else 'None'}")
         print(f"Save path: {cp_save_path}")
         print("=" * 80 + "\n", flush=True)
 
     # Seed everything
-    seed_everything(42)
+    seed_everything(seed)
 
     ### If enable monthly loader, use custom dataloader instead of datamodule
     if config["data"].get("enable_timestep_loader", False):
@@ -1062,7 +1089,7 @@ def main(device):
             in_vars=in_vars,
             out_vars=out_vars,
             pred_range=config["data"]["pred_range"],
-            subsample=6,
+            subsample=int(config["data"].get("subsample", 6)),
             transform=apply_normalization,
             rank=world_rank,
             world_size=world_size,
@@ -1075,7 +1102,7 @@ def main(device):
             in_vars=in_vars,
             out_vars=out_vars,
             pred_range=config["data"]["pred_range"],
-            subsample=6,
+            subsample=int(config["data"].get("subsample", 6)),
             transform=apply_normalization,
             rank=world_rank,
             world_size=world_size,
@@ -1092,7 +1119,7 @@ def main(device):
 
         train_dataloader = DataLoader(
             train_dataset,
-            batch_size=config["trainer"]["batch_size"],
+            batch_size=batch_size_per_rank(config, world_size),
             shuffle=True,
             # num_workers=config["trainer"].get("num_workers", 4),
             num_workers=0,
@@ -1103,7 +1130,7 @@ def main(device):
         )
         val_dataloader = DataLoader(
             val_dataset,
-            batch_size=config["trainer"]["batch_size"],
+            batch_size=batch_size_per_rank(config, world_size),
             shuffle=False,
             # num_workers=config["trainer"].get("num_workers", 4),
             num_workers=0,
@@ -1151,7 +1178,9 @@ def main(device):
         train_dataset = SequentialMonthlyDataset(
             train_files_dir, in_vars, out_vars,
             pred_range=config["data"]["pred_range"],
-            subsample=6,
+            history=int(config["data"].get("history", config["model"].get("history", 1))),
+            window=int(config["data"].get("window", 6)),
+            subsample=int(config["data"].get("subsample", 6)),
             transform=apply_normalization,
             rank=world_rank,
             world_size=world_size,
@@ -1161,7 +1190,9 @@ def main(device):
         val_dataset = SequentialMonthlyDataset(
             val_files_dir, in_vars, out_vars,
             pred_range=config["data"]["pred_range"],
-            subsample=6,
+            history=int(config["data"].get("history", config["model"].get("history", 1))),
+            window=int(config["data"].get("window", 6)),
+            subsample=int(config["data"].get("subsample", 6)),
             transform=apply_normalization,
             rank=world_rank,
             world_size=world_size,
@@ -1170,14 +1201,14 @@ def main(device):
 
         train_dataloader = DataLoader(
             train_dataset,
-            batch_size=config["trainer"]["batch_size"],
-            num_workers=1,
+            batch_size=batch_size_per_rank(config, world_size),
+            num_workers=int(config["trainer"].get("num_workers", 1)),
             collate_fn=custom_collate
         )
         val_dataloader = DataLoader(
             val_dataset,
-            batch_size=config["trainer"]["batch_size"],
-            num_workers=1,
+            batch_size=batch_size_per_rank(config, world_size),
+            num_workers=int(config["trainer"].get("num_workers", 1)),
             collate_fn=custom_collate
         )
 
@@ -1249,21 +1280,20 @@ def main(device):
         # print(model)
         # print("="*80 + "\n", flush=True)
 
-    # Now apply activation checkpointing AFTER FSDP wrapping (critical for memory!)
-    # This reduces memory by ~3x by recomputing activations during backward pass
-    # Use REENTRANT mode - more stable with use_orig_params=True on ROCm
-    reentrant_wrapper = functools.partial(
-        checkpoint_wrapper,
-        checkpoint_impl=CheckpointImpl.REENTRANT,
-    )
-
-    check_fn = lambda submodule: isinstance(submodule, Block)
-
-    apply_activation_checkpointing(
-        model,
-        checkpoint_wrapper_fn=reentrant_wrapper, #non_reentrant_wrapper
-        check_fn=check_fn
-    )
+    # Apply activation checkpointing after FSDP wrapping when requested.
+    # NO_REENTRANT preserves gradients when the wrapped block inputs do not
+    # themselves require gradients, which is common at the start of the model.
+    if activation_checkpointing:
+        non_reentrant_wrapper = functools.partial(
+            checkpoint_wrapper,
+            checkpoint_impl=CheckpointImpl.NO_REENTRANT,
+        )
+        check_fn = lambda submodule: isinstance(submodule, Block)
+        apply_activation_checkpointing(
+            model,
+            checkpoint_wrapper_fn=non_reentrant_wrapper,
+            check_fn=check_fn,
+        )
 
     if world_rank == 0:
         print("[DEBUG] FSDP wrapping completed, now creating losses (this may take several minutes)...", flush=True)
@@ -1383,8 +1413,8 @@ def main(device):
 
 if __name__ == "__main__":
 
-    os.environ["MASTER_ADDR"] = str(os.environ["HOSTNAME"])
-    os.environ["MASTER_PORT"] = "29500"
+    os.environ.setdefault("MASTER_ADDR", str(os.environ["HOSTNAME"]))
+    os.environ.setdefault("MASTER_PORT", "29500")
     os.environ["WORLD_SIZE"] = os.environ["SLURM_NTASKS"]
     os.environ["RANK"] = os.environ["SLURM_PROCID"]
 

@@ -4,7 +4,7 @@ import glob
 import os
 import random
 import threading
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, get_worker_info
 
 
 class SequentialMonthlyDataset(IterableDataset):
@@ -13,6 +13,8 @@ class SequentialMonthlyDataset(IterableDataset):
                  in_vars,
                  out_vars,
                  pred_range=120,
+                 history=1,
+                 window=6,
                  subsample=6,
                  transform=None,
                  rank=0,
@@ -36,6 +38,8 @@ class SequentialMonthlyDataset(IterableDataset):
             in_vars: List of input variable names
             out_vars: List of output variable names
             pred_range: Prediction lead time in timesteps
+            history: Number of historical frames used as model input
+            window: Interval in timesteps between historical frames
             subsample: Temporal subsampling factor
             transform: Optional transform function (normalization)
             rank: Current process rank
@@ -44,7 +48,12 @@ class SequentialMonthlyDataset(IterableDataset):
         """
         self.in_vars = in_vars
         self.out_vars = out_vars
-        self.history = 1
+        if history < 1:
+            raise ValueError("history must be positive")
+        if window < 1:
+            raise ValueError("window must be positive")
+        self.history = history
+        self.window = window
         self.pred_range = pred_range
         self.subsample = subsample
         self.transform = transform
@@ -136,6 +145,9 @@ class SequentialMonthlyDataset(IterableDataset):
     def __iter__(self):
         # Shuffle files for this epoch
         files_to_process = self.files.copy()
+        worker = get_worker_info()
+        if worker is not None:
+            files_to_process = files_to_process[worker.id::worker.num_workers]
         random.shuffle(files_to_process)
         samples_yielded = 0
 
@@ -175,10 +187,10 @@ class SequentialMonthlyDataset(IterableDataset):
             first_var = self.in_vars[0]
             T_total = data_dict[first_var].shape[0]
 
-            # Generate valid time indices
-            # Need: t - history >= 0 and t + pred_range - 1 < T_total
-            # So: t >= history and t <= T_total - pred_range
-            indices = list(range(self.history, T_total - self.pred_range, self.subsample))
+            # Each sample starts at t, takes `history` frames `window` steps
+            # apart, and predicts `pred_range` steps after the final frame.
+            required_span = (self.history - 1) * self.window + self.pred_range
+            indices = list(range(0, T_total - required_span, self.subsample))
             random.shuffle(indices)
 
             for t in indices:
@@ -186,8 +198,10 @@ class SequentialMonthlyDataset(IterableDataset):
                     # Build input tensor: [num_vars * history, H, W]
                     x_list = []
                     for var in self.in_vars:
-                        # Slice [t-history : t] -> shape [history, H, W]
-                        channel = data_dict[var][t - self.history : t]
+                        history_indices = [
+                            t + step * self.window for step in range(self.history)
+                        ]
+                        channel = data_dict[var][history_indices]
                         x_list.append(channel)
 
                     x = torch.cat(x_list, dim=0)  # [num_vars * history, H, W]
@@ -195,8 +209,10 @@ class SequentialMonthlyDataset(IterableDataset):
                     # Build output tensor: [num_out_vars, H, W]
                     y_list = []
                     for var in self.out_vars:
-                        # Target at t + pred_range - 1
-                        target = data_dict[var][t + self.pred_range - 1]  # [H, W]
+                        target_index = (
+                            t + (self.history - 1) * self.window + self.pred_range
+                        )
+                        target = data_dict[var][target_index]  # [H, W]
                         y_list.append(target)
 
                     y = torch.stack(y_list, dim=0)  # [num_out_vars, H, W]

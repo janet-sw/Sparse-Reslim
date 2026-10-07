@@ -1,10 +1,10 @@
 trainer:
   max_epochs: 30
-  batch_size: 16
+  batch_size: 32
   num_workers: 2
-  seed: 42
+  seed: "${TRAINING_SEED:-42}"
   checkpoint: null
-  checkpoint_save_path: "<OUTPUT_DIR>/deterministic"
+  checkpoint_save_path: "${OUTPUT_ROOT:-./outputs}/table1_1.40625_dense/seed_${TRAINING_SEED:-42}"
   data_type: bfloat16
   train_loss: lat_mse
   num_gpus: 16
@@ -18,8 +18,7 @@ parallelism:
   activation_checkpointing: true
 
 data:
-  era5_dir: "<DATA_DIR>/era5_1.0deg"
-  timestep_data_dir: "<DATA_DIR>/era5_1.0deg_timesteps"
+  era5_dir: "${DATA_ROOT}"
   forecast_type: direct
   history: 1
   window: 6
@@ -45,8 +44,8 @@ data:
     - 10m_u_component_of_wind
 
 model:
-  preset: res_slimvit_adaptive
-  img_size: [180, 360]
+  preset: res_slimvit
+  img_size: [128, 256]
   superres_factor: 1
   downsample_mode: bilinear
   antialias: true
@@ -61,9 +60,9 @@ model:
   drop_rate: 0.0
   learn_pos_emb: true
   input_refine_cnn: true
-  keep_ratio: 0.25
+  keep_ratio: 1.0
   num_dense_early: 2
-  num_sparse_middle: 8
+  num_sparse_middle: 0
   base_lr: 5e-4
   weight_decay: 1e-5
   beta_1: 0.9

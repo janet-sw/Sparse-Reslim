@@ -49,7 +49,8 @@ pip install -e '.[dev]'
 
 xFormers is only required when `FusedAttn.CK` is selected. MPI and DDStore are
 only required when `ORBIT_USE_DDSTORE=1`; standard data loading does not
-require them.
+require them. PyTorch Lightning is not used by the forecasting entry points;
+install `.[climatebench]` only when using the legacy ClimateBench module.
 
 ## Quick verification
 
@@ -87,11 +88,38 @@ The training entry points use the Slurm environment plus PyTorch
 distributed/FSDP, matching the paper runs. Model import and single-process
 forward execution do not require distributed initialization.
 
+### Table 1 deterministic setup
+
+The paired configs below encode the paper's 1.40625° dense and Sparse-Reslim
+settings: a 128 × 256 grid, 120-hour lead time, global batch size 32, 30 epochs,
+bfloat16, activation checkpointing, and FSDP over 16 MI250X GCDs.
+
+```bash
+export DATA_ROOT=/path/to/era5_1.40625
+export OUTPUT_ROOT=$PWD/outputs
+export TRAINING_SEED=42
+
+# Sparse-Reslim (r=0.25, block split 2/8/2)
+sbatch examples/launch_table1_frontier.sh
+
+# Dense baseline, using the same seed and training protocol
+CONFIG_PATH=$PWD/configs/table1_dense_era5_1.40625.yaml \
+  sbatch examples/launch_table1_frontier.sh
+```
+
+`history`, `window`, `subsample`, paths, seed, and activation checkpointing are
+all controlled by YAML. The batch size in YAML is global (2 samples per rank
+for the 16-GPU Table 1 runs). For a controlled comparison, run dense and sparse
+with identical seeds; multiple seeds are recommended because random routing
+introduces run-to-run variation.
+
 ## Data and checkpoints
 
 ERA5 data and trained checkpoints are not redistributed in this repository.
 Configuration files document the expected variables, temporal split, forecast
-lead time, and model hyperparameters.
+lead time, and model hyperparameters. The Table 1 configs reproduce the stated
+training protocol but do not guarantee bitwise-identical metrics across
+software stacks or random seeds.
 
 ## Acknowledgements
 
